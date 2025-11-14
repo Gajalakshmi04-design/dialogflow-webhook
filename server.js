@@ -1,6 +1,8 @@
 import express from "express";
 import bodyParser from "body-parser";
 import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
 
 const app = express();
 app.use(bodyParser.json());
@@ -8,28 +10,38 @@ app.use(bodyParser.json());
 const AZURE_KEY = process.env.AZURE_KEY;
 const AZURE_REGION = process.env.AZURE_REGION;
 
-app.get("/", (req, res) => {
-  res.send("Server is running");
+const __dirname = path.resolve();
+
+// --------------------
+// TEST ENDPOINT
+// --------------------
+app.get("/test", (req, res) => {
+  res.send("Azure TTS working ✔️");
 });
 
 // --------------------
-// TEST AZURE ENDPOINT
+// DIALOGFLOW WEBHOOK
 // --------------------
-app.get("/test", async (req, res) => {
+app.post("/dialogflow", async (req, res) => {
   try {
-    if (!AZURE_KEY || !AZURE_REGION) {
-      return res.status(500).send("Azure env vars missing");
+    const userMessage = req.body.queryResult.queryText;
+
+    if (!userMessage) {
+      return res.send({
+        fulfillmentText: "No input received."
+      });
     }
 
+    // Azure TTS URL
     const ttsUrl = `https://${AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
     const ssml = `
       <speak version="1.0" xml:lang="en-US">
-        <voice name="en-US-JennyNeural">Hello from Azure test.</voice>
+        <voice name="en-US-JennyNeural">${userMessage}</voice>
       </speak>
     `;
 
-    const response = await fetch(ttsUrl, {
+    const azureResponse = await fetch(ttsUrl, {
       method: "POST",
       headers: {
         "Ocp-Apim-Subscription-Key": AZURE_KEY,
@@ -39,18 +51,39 @@ app.get("/test", async (req, res) => {
       body: ssml
     });
 
-    if (!response.ok) {
-      const err = await response.text();
-      return res.status(500).send(`Azure Error: ${err}`);
-    }
+    const audioBuffer = await azureResponse.arrayBuffer();
+    const audioFile = Buffer.from(audioBuffer);
 
-    res.send("Azure TTS working ✔️");
+    const filename = `audio_${Date.now()}.mp3`;
+    const filePath = path.join(__dirname, filename);
+
+    fs.writeFileSync(filePath, audioFile);
+
+    const fileUrl = `https://${req.headers.host}/${filename}`;
+
+    return res.send({
+      fulfillmentText: "Here is your audio.",
+      fulfillmentMessages: [
+        {
+          payload: {
+            audioUrl: fileUrl
+          }
+        }
+      ]
+    });
+
   } catch (err) {
-    res.status(500).send("Server Error: " + err.message);
+    return res.send({
+      fulfillmentText: "Error: " + err.message
+    });
   }
 });
 
 // --------------------
+// STATIC AUDIO HOSTING
+// --------------------
+app.use(express.static(__dirname));
+
 app.listen(10000, () => {
   console.log("Server running on port 10000");
 });
