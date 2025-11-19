@@ -12,12 +12,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // -------------------------------
-//  STATIC HOSTING FOR AUDIO FILES
+// 1. STATIC HOSTING FOR AUDIO
 // -------------------------------
 app.use("/audio", express.static(path.join(__dirname, "audio")));
 
 // -------------------------------
-//      AZURE CONFIG
+// 2. AZURE CONFIG
 // -------------------------------
 const AZURE_KEY = process.env.AZURE_KEY;
 const AZURE_REGION = process.env.AZURE_REGION;
@@ -25,27 +25,24 @@ const AZURE_REGION = process.env.AZURE_REGION;
 const ttsUrl = `https://${AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
 // -------------------------------
-//      MAIN DIALOGFLOW WEBHOOK
+// 3. MAIN DIALOGFLOW WEBHOOK
 // -------------------------------
 app.post("/webhook", async (req, res) => {
   try {
-    const text =
-      req.body.queryResult.fulfillmentText ||
-      req.body.queryResult.queryText ||
-      "नमस्ते, मैं आपकी कैसे मदद कर सकती हूँ?";
+    const text = req.body.queryResult.fulfillmentText || "Hello from Azure";
 
-    // ----------- SLOWER, NATURAL AARTI VOICE ------------
+    // ---------------------------
+    // 4. GENERATE AUDIO FROM AZURE
+    // ---------------------------
     const ssml = `
-      <speak version="1.0" xml:lang="hi-IN">
-        <voice name="hi-IN-AartiNeural">
-          <prosody rate="0.85">
-            ${text}
-          </prosody>
+      <speak version='1.0' xml:lang='hi-IN'>
+        <voice name='hi-IN-AartiNeural'>
+        <prosody rate="0.85">
+          ${text}
         </voice>
       </speak>
     `;
 
-    // ----------- CALL AZURE TTS ------------
     const ttsResponse = await fetch(ttsUrl, {
       method: "POST",
       headers: {
@@ -58,19 +55,28 @@ app.post("/webhook", async (req, res) => {
 
     if (!ttsResponse.ok) {
       console.log("Azure Error:", await ttsResponse.text());
-      return res.json({ fulfillmentText: "Azure TTS error" });
+      return res.json({
+        fulfillmentText: "Azure TTS error"
+      });
     }
 
     const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
 
-    // ----------- SAVE MP3 ------------
+    // ---------------------------
+    // 5. SAVE MP3 FILE
+    // ---------------------------
     const filename = `tts_${Date.now()}.mp3`;
-    fs.writeFileSync(path.join(__dirname, "audio", filename), audioBuffer);
+    const filepath = path.join(__dirname, "audio", filename);
+
+    fs.writeFileSync(filepath, audioBuffer);
 
     const publicUrl = `${req.protocol}://${req.get("host")}/audio/${filename}`;
-    console.log("🔊 AUDIO URL:", publicUrl);
 
-    // ----------- SEND AUDIO TO DIALOGFLOW ------------
+    console.log("Generated Audio URL:", publicUrl);
+
+    // ---------------------------
+    // 6. RETURN AUDIO TO DIALOGFLOW PHONE GATEWAY
+    // ---------------------------
     return res.json({
       payload: {
         google: {
@@ -82,7 +88,7 @@ app.post("/webhook", async (req, res) => {
                   mediaType: "AUDIO",
                   mediaObjects: [
                     {
-                      name: "Aarti Voice",
+                      name: "Azure Aarti Voice",
                       contentUrl: publicUrl
                     }
                   ]
@@ -96,14 +102,20 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("Webhook Error:", err);
-    return res.json({ fulfillmentText: "Server error" });
+    res.json({
+      fulfillmentText: "Internal server error"
+    });
   }
 });
 
-// -----------------------
+// -------------------------------
+// 7. HEALTH CHECK
+// -------------------------------
 app.get("/", (req, res) => {
-  res.send("Dialogflow + Azure TTS Webhook Running 🚀");
+  res.send("Dialogflow Webhook + Azure TTS is running 🚀");
 });
-// -----------------------
 
-export default app;
+// -------------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Server running on port " + PORT));
+
